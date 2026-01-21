@@ -1,33 +1,77 @@
-variable "aws_region" { type = string }
-variable "account_id" { type = string }
+variable "aws_region" {
+  type        = string
+  description = "AWS region"
+}
 
-# Existing S3 bucket (you already created this)
-variable "bucket" { type = string }
+variable "account_id" {
+  type        = string
+  description = "AWS account id"
+}
 
-# Where CI/CD uploads your code
-variable "scripts_prefix" { type = string } # e.g. "final-demo/scripts"
-variable "sql_prefix"     { type = string } # e.g. "final-demo/sql"
+variable "bucket" {
+  type        = string
+  description = "S3 bucket for lakehouse"
+}
 
-# Glue execution role you already have (AWSGlueServiceRole-NYCTaxi)
-variable "glue_role_arn" { type = string }
+variable "scripts_prefix" {
+  type        = string
+  description = "S3 prefix where Glue scripts are uploaded"
+}
 
-# Athena
-variable "athena_workgroup"    { type = string } # e.g. "nyc-governed-wg"
-variable "athena_results_s3"   { type = string } # e.g. "s3://bucket/athena_results/"
-variable "athena_db_master"    { type = string } # e.g. "nyc_master_db"
-variable "athena_db_curated"   { type = string } # e.g. "nyc_curated_db"
+variable "sql_prefix" {
+  type        = string
+  description = "S3 prefix where Athena SQL files are uploaded"
+}
 
-# Redshift
-variable "redshift_secret_name" { type = string } # SecretsManager name containing host/db/user/password
-variable "redshift_iam_role_arn" { type = string } # role attached to Redshift for COPY from S3
-variable "redshift_db" { type = string }           # e.g. "dev"
+variable "glue_role_arn" {
+  type        = string
+  description = "Glue execution role ARN"
+}
 
-# Tags
-variable "tags" {
-  type = map(string)
-  default = {
-    project = "nyc-governed-lakehouse"
-    env     = "dev"
-    owner   = "sumanth"
-  }
+variable "athena_workgroup" {
+  type        = string
+  description = "Athena workgroup name"
+}
+
+variable "athena_results_s3" {
+  type        = string
+  description = "S3 path for Athena query results"
+}
+
+variable "athena_db_master" {
+  type        = string
+  description = "Athena DB for master datasets"
+}
+
+variable "athena_db_curated" {
+  type        = string
+  description = "Athena DB for curated datasets"
+}
+
+variable "redshift_secret_name" {
+  type        = string
+  description = "Secrets Manager secret name for Redshift creds"
+}
+
+variable "redshift_iam_role_arn" {
+  type        = string
+  description = "IAM role ARN Redshift uses for COPY from S3"
+}
+
+variable "redshift_db" {
+  type        = string
+  description = "Redshift database name"
+}
+
+# ---- These two fix your current validate error ----
+variable "project" {
+  type        = string
+  description = "Short project prefix for resource names"
+  default     = "nyc"
+}
+
+variable "owner" {
+  type        = string
+  description = "Owner tag"
+  default     = "sumanth"
 }
