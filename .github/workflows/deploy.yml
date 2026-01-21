@@ -9,7 +9,6 @@ env:
   AWS_REGION: us-east-1
   TF_WORKING_DIR: infra
   S3_DEMO_PREFIX: final-demo
-  AUTO_RUN: true
 
 jobs:
   deploy:
@@ -17,13 +16,13 @@ jobs:
 
     steps:
       # ======================================================
-      # Checkout repo
+      # 1) Checkout
       # ======================================================
       - name: Checkout code
         uses: actions/checkout@v4
 
       # ======================================================
-      # AWS Credentials
+      # 2) AWS Credentials
       # ======================================================
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -33,25 +32,51 @@ jobs:
           aws-region:            ${{ env.AWS_REGION }}
 
       # ======================================================
-      # Upload Glue scripts (REAL scripts)
+      # 3) Debug (so path issues never happen again)
+      # ======================================================
+      - name: Debug repo folders
+        run: |
+          echo "=== Repo root ==="
+          ls -la
+          echo "=== Find python files (top 4 levels) ==="
+          find . -maxdepth 4 -type f -name "*.py" | sed -e 's|^\./||' | head -n 200
+          echo "=== Find SQL files (top 5 levels) ==="
+          find . -maxdepth 5 -type f -name "*.sql" | sed -e 's|^\./||' | head -n 200
+
+      # ======================================================
+      # 4) Upload Glue scripts to S3
+      #    Your repo has: glue/*.py (from your screenshot)
       # ======================================================
       - name: Upload Glue scripts to S3
         run: |
-          aws s3 sync app/glue \
+          if [ ! -d "glue" ]; then
+            echo "ERROR: glue/ folder not found at repo root."
+            exit 1
+          fi
+
+          aws s3 sync glue \
             s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/scripts \
-            --delete
+            --delete \
+            --region $AWS_REGION
 
       # ======================================================
-      # Upload Athena SQL
+      # 5) Upload Athena SQL to S3
+      #    Your repo has: athena/ddl/*.sql (from your screenshot)
       # ======================================================
       - name: Upload Athena SQL to S3
         run: |
-          aws s3 sync app/sql \
+          if [ ! -d "athena/ddl" ]; then
+            echo "ERROR: athena/ddl folder not found at repo root."
+            exit 1
+          fi
+
+          aws s3 sync athena/ddl \
             s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/sql \
-            --delete
+            --delete \
+            --region $AWS_REGION
 
       # ======================================================
-      # Terraform setup
+      # 6) Terraform
       # ======================================================
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -64,9 +89,6 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      # ======================================================
-      # Terraform Apply (infra + Step Functions)
-      # ======================================================
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
@@ -86,18 +108,22 @@ jobs:
             -var="redshift_db=dev"
 
       # ======================================================
-      # OPTIONAL: Auto-run the pipeline after deploy
+      # 7) OPTIONAL: Auto-run the pipeline after deploy
       # ======================================================
       - name: Start Step Functions execution
-        if: ${{ env.AUTO_RUN == 'true' }}
+        if: ${{ secrets.AUTO_RUN == 'true' }}
         run: |
           SFN_ARN=$(aws stepfunctions list-state-machines \
             --query "stateMachines[?name=='final-demo-governed-lakehouse'].stateMachineArn | [0]" \
             --output text \
             --region $AWS_REGION)
 
-          echo "Starting execution: $SFN_ARN"
+          if [ "$SFN_ARN" = "None" ] || [ -z "$SFN_ARN" ]; then
+            echo "ERROR: Could not find Step Function final-demo-governed-lakehouse"
+            exit 1
+          fi
 
+          echo "Starting execution: $SFN_ARN"
           aws stepfunctions start-execution \
             --state-machine-arn "$SFN_ARN" \
             --input file://stepfunctions/payloads/run_input.dev.json \
