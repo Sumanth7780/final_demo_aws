@@ -3,6 +3,8 @@ import time
 import json
 import boto3
 from botocore.exceptions import ClientError
+import boto3
+REGION = boto3.session.Session().region_name
 
 secrets = boto3.client("secretsmanager")
 redshift_data = boto3.client("redshift-data")

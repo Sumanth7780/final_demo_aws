@@ -24,8 +24,8 @@ data "archive_file" "redshift_copy_load_zip" {
 
 # ------------------------------------------------------------
 # Lambda Functions
-# Reuse existing: aws_iam_role.lambda_exec (from iam.tf)
-# Reuse existing log groups (from cloudwatch.tf)
+# Reuse existing IAM role: aws_iam_role.lambda_exec (from iam.tf)
+# NOTE: Do NOT set reserved env keys like AWS_REGION.
 # ------------------------------------------------------------
 
 resource "aws_lambda_function" "athena_submit_sql" {
@@ -42,13 +42,13 @@ resource "aws_lambda_function" "athena_submit_sql" {
 
   environment {
     variables = {
-      AWS_REGION         = var.aws_region
-      ATHENA_WORKGROUP   = var.athena_workgroup
-      ATHENA_RESULTS_S3  = var.athena_results_s3
-      ATHENA_DB_MASTER   = var.athena_db_master
-      ATHENA_DB_CURATED  = var.athena_db_curated
-      SQL_S3_BUCKET      = var.bucket
-      SQL_S3_PREFIX      = var.sql_prefix
+      ATHENA_WORKGROUP  = var.athena_workgroup
+      ATHENA_RESULTS_S3 = var.athena_results_s3
+      ATHENA_DB_MASTER  = var.athena_db_master
+      ATHENA_DB_CURATED = var.athena_db_curated
+
+      SQL_S3_BUCKET = var.bucket
+      SQL_S3_PREFIX = var.sql_prefix
     }
   }
 
@@ -69,7 +69,6 @@ resource "aws_lambda_function" "redshift_copy_load" {
 
   environment {
     variables = {
-      AWS_REGION           = var.aws_region
       REDSHIFT_SECRET_NAME = var.redshift_secret_name
       REDSHIFT_DB          = var.redshift_db
       REDSHIFT_IAM_ROLE    = var.redshift_iam_role_arn
