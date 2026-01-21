@@ -47,17 +47,25 @@ jobs:
       # 4) Upload Glue scripts to S3
       #    Your repo has: glue/*.py (from your screenshot)
       # ======================================================
-      - name: Upload Glue scripts to S3
+      - name: Upload Athena SQL to S3 (auto-detect)
         run: |
-          if [ ! -d "glue" ]; then
-            echo "ERROR: glue/ folder not found at repo root."
+          echo "Searching for Athena ddl folder..."
+          SQL_DIR=$(find . -type d -path "*/athena/ddl" | head -n 1)
+
+          if [ -z "$SQL_DIR" ]; then
+            echo "ERROR: Could not find any */athena/ddl folder in repo."
+            echo "Folders under repo root:"
+            find . -maxdepth 3 -type d | sed -e 's|^\./||'
             exit 1
           fi
 
-          aws s3 sync glue \
-            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/scripts \
+          echo "Found SQL folder: $SQL_DIR"
+          aws s3 sync "$SQL_DIR" \
+            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/sql \
             --delete \
             --region $AWS_REGION
+
+
 
       # ======================================================
       # 5) Upload Athena SQL to S3
