@@ -1,20 +1,268 @@
+# ------------------------------------------------------------
+# IAM Role for Step Functions
+# ------------------------------------------------------------
+resource "aws_iam_role" "stepfunctions_role" {
+  name = "${var.project}-sfn-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "states.amazonaws.com" },
+      Action = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Project = var.project
+    Owner   = var.owner
+  }
+}
+
+resource "aws_iam_role_policy" "stepfunctions_policy" {
+  name = "${var.project}-sfn-policy"
+  role = aws_iam_role.stepfunctions_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      # Glue job run permissions (needed for glue:startJobRun.sync)
+      {
+        Effect = "Allow",
+        Action = [
+          "glue:StartJobRun",
+          "glue:GetJobRun",
+          "glue:GetJobRuns",
+          "glue:GetJob"
+        ],
+        Resource = "*"
+      },
+
+      # Invoke Lambdas
+      {
+        Effect = "Allow",
+        Action = [
+          "lambda:InvokeFunction"
+        ],
+        Resource = [
+          aws_lambda_function.athena_submit_sql.arn,
+          aws_lambda_function.redshift_copy_load.arn
+        ]
+      },
+
+      # Write audit record
+      {
+        Effect = "Allow",
+        Action = [
+          "dynamodb:PutItem"
+        ],
+        Resource = aws_dynamodb_table.pipeline_audit.arn
+      }
+    ]
+  })
+}
+
+# ------------------------------------------------------------
+# Step Functions Definition (JSON via jsonencode)
+# ------------------------------------------------------------
 locals {
   sfn_definition = jsonencode({
-    Comment = "NYC Taxi Governed Lakehouse - Final Demo"
-    StartAt = "Day6RawToValidated"
-    States  = {
-      Day6RawToValidated = {
+    Comment = "FINAL DEMO: NYC Governed Lakehouse (Week2+3+4)"
+    StartAt = "Day6_RawToValidated"
+
+    States = {
+      # ---------------------------
+      # Day6: Raw -> Validated (Delta)
+      # ---------------------------
+      Day6_RawToValidated = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
-          JobName = aws_glue_job.day6.name
-          Arguments = {
-            "--RAW_TRIPS_PATH.$" = "$.paths.raw_trips"
-            "--RAW_ZONES_PATH.$" = "$.paths.raw_zones"
-            "--DELTA_OUT_PATH.$" = "$.paths.validated_delta"
+          "JobName.$" = "$.jobs.day6"
+          "Arguments" = {
+            "--RAW_TRIPS_PATH.$"  = "$.paths.raw_trips"
+            "--RAW_ZONES_PATH.$"  = "$.paths.raw_zones"
+            "--DELTA_OUT_PATH.$"  = "$.paths.validated_delta"
           }
         }
-        Next = "Day7ValidatedToCurated"
+        Next = "Day7_ValidatedToCurated"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Day7: Enrich -> Curated (Delta)
+      # ---------------------------
+      Day7_ValidatedToCurated = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          "JobName.$" = "$.jobs.day7"
+          "Arguments" = {
+            "--VALIDATED_DELTA_PATH.$" = "$.paths.validated_delta"
+            "--RAW_ZONES_CSV_PATH.$"   = "$.paths.zones_csv"
+            "--CURATED_DELTA_PATH.$"   = "$.paths.curated_delta"
+          }
+        }
+        Next = "Day8_DQGates"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Day8: DQ Gates
+      # ---------------------------
+      Day8_DQGates = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          "JobName.$" = "$.jobs.day8"
+          "Arguments" = {
+            "--INPUT_DELTA_PATH.$"   = "$.paths.validated_delta"
+            "--CURATED_DELTA_PATH.$" = "$.paths.curated_delta"
+            "--QUARANTINE_PATH.$"    = "$.paths.quarantine"
+            "--DQ_REPORT_PATH.$"     = "$.paths.dq_report"
+          }
+        }
+        Next = "Day9_MDMZones"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Day9: MDM Zones
+      # ---------------------------
+      Day9_MDMZones = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          "JobName.$" = "$.jobs.day9"
+          "Arguments" = {
+            "--RAW_ZONES_PATH.$"      = "$.paths.zones_csv"
+            "--MASTER_OUT_PATH.$"     = "$.paths.master_zones_delta"
+            "--STEWARD_QUEUE_PATH.$"  = "$.paths.steward_queue"
+            "--REJECTS_PATH.$"        = "$.paths.mdm_rejects"
+            "--AUDIT_PATH.$"          = "$.paths.mdm_audit"
+            "--HIGH_CONF.$"           = "$.paths.high_conf"
+            "--MED_CONF.$"            = "$.paths.med_conf"
+          }
+        }
+        Next = "Day10_LifecycleOrphans"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Day10: Lifecycle + Orphans + dashboards (IMPORTANT: includes 2 required args)
+      # ---------------------------
+      Day10_LifecycleOrphans = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          "JobName.$" = "$.jobs.day10"
+          "Arguments" = {
+            "--MASTER_ZONES_DELTA_PATH.$"  = "$.paths.master_zones_delta"
+            "--CURATED_TRIPS_DELTA_PATH.$" = "$.paths.curated_delta"
+
+            "--ORPHANS_OUT_PATH.$"         = "$.paths.orphans"
+            "--LIFECYCLE_SNAPSHOT_PATH.$"  = "$.paths.lifecycle"
+            "--AUDIT_HISTORY_OUT_PATH.$"   = "$.paths.delta_history"
+            "--RUN_SUMMARY_PATH.$"         = "$.paths.run_summary"
+
+            "--ORPHANS_CSV_OUT.$"                = "$.paths.orphans_csv_out"
+            "--STEWARD_ACTIVITY_LOG_CSV_OUT.$"   = "$.paths.steward_activity_log_csv_out"
+          }
+        }
+        Next = "Export_DeltaToParquet"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Week4: Export Delta -> Parquet (for Athena + Redshift)
+      # ---------------------------
+      Export_DeltaToParquet = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          "JobName.$" = "$.jobs.export"
+          "Arguments" = {
+            "--S3_DELTA_ZONES.$" = "$.paths.master_zones_delta"
+            "--S3_DELTA_TRIPS.$" = "$.paths.curated_delta"
+            "--S3_RS_DIM_ZONE.$" = "$.paths.rs_dim_zone"
+            "--S3_RS_FACT_TRIP.$" = "$.paths.rs_fact_trip"
+          }
+        }
+        Next = "Athena_CreateTablesViews"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 15
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
+      }
+
+      # ---------------------------
+      # Athena Lambda: create DBs + external tables + certified view
+      # ---------------------------
+      Athena_CreateTablesViews = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        Parameters = {
+          FunctionName = aws_lambda_function.athena_submit_sql.arn
+          "Payload.$"  = "$"
+        }
+        Next = "Redshift_CopyLoad"
         Retry = [{
           ErrorEquals     = ["States.ALL"]
           IntervalSeconds = 10
@@ -24,133 +272,90 @@ locals {
         Catch = [{
           ErrorEquals = ["States.ALL"]
           ResultPath  = "$.error"
-          Next        = "FailPipeline"
+          Next        = "AuditFailure"
         }]
       }
 
-      Day7ValidatedToCurated = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = {
-          JobName = aws_glue_job.day7.name
-          Arguments = {
-            "--VALIDATED_DELTA_PATH.$" = "$.paths.validated_delta"
-            "--RAW_ZONES_CSV_PATH.$"   = "$.paths.zones_csv"
-            "--CURATED_DELTA_PATH.$"   = "$.paths.curated_delta"
-          }
-        }
-        Next = "Day8DQGates"
-      }
-
-      Day8DQGates = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = {
-          JobName = aws_glue_job.day8.name
-          Arguments = {
-            "--INPUT_DELTA_PATH.$"   = "$.paths.validated_delta"
-            "--CURATED_DELTA_PATH.$" = "$.paths.curated_delta"
-            "--QUARANTINE_PATH.$"    = "$.paths.quarantine"
-            "--DQ_REPORT_PATH.$"     = "$.paths.dq_report"
-          }
-        }
-        Next = "Day9MDMZones"
-      }
-
-      Day9MDMZones = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = {
-          JobName = aws_glue_job.day9.name
-          Arguments = {
-            "--RAW_ZONES_PATH.$"     = "$.paths.zones_csv"
-            "--MASTER_OUT_PATH.$"    = "$.paths.master_zones_delta"
-            "--STEWARD_QUEUE_PATH.$" = "$.paths.steward_queue"
-            "--REJECTS_PATH.$"       = "$.paths.mdm_rejects"
-            "--AUDIT_PATH.$"         = "$.paths.mdm_audit"
-            "--HIGH_CONF"            = "0.95"
-            "--MED_CONF"             = "0.80"
-          }
-        }
-        Next = "Day10LifecycleOrphans"
-      }
-
-      Day10LifecycleOrphans = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = {
-          JobName = aws_glue_job.day10.name
-          Arguments = {
-            "--MASTER_ZONES_DELTA_PATH.$"  = "$.paths.master_zones_delta"
-            "--CURATED_TRIPS_DELTA_PATH.$" = "$.paths.curated_delta"
-            "--ORPHANS_OUT_PATH.$"         = "$.paths.orphans"
-            "--LIFECYCLE_SNAPSHOT_PATH.$"  = "$.paths.lifecycle"
-            "--AUDIT_HISTORY_OUT_PATH.$"   = "$.paths.delta_history"
-            "--RUN_SUMMARY_PATH.$"         = "$.paths.run_summary"
-          }
-        }
-        Next = "ExportParquetForServing"
-      }
-
-      ExportParquetForServing = {
-        Type     = "Task"
-        Resource = "arn:aws:states:::glue:startJobRun.sync"
-        Parameters = {
-          JobName = aws_glue_job.export_parquet.name
-          Arguments = {
-            "--S3_DELTA_ZONES.$"  = "$.paths.master_zones_delta"
-            "--S3_DELTA_TRIPS.$"  = "$.paths.curated_delta"
-            "--S3_RS_DIM_ZONE.$"  = "$.paths.rs_dim_zone"
-            "--S3_RS_FACT_TRIP.$" = "$.paths.rs_fact_trip"
-          }
-        }
-        Next = "RunAthenaDDLViews"
-      }
-
-      RunAthenaDDLViews = {
+      # ---------------------------
+      # Redshift Lambda: COPY load dim/fact from S3 Parquet
+      # ---------------------------
+      Redshift_CopyLoad = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
         Parameters = {
-          FunctionName = aws_lambda_function.athena_submit.arn
-          Payload.$    = "$"
+          FunctionName = aws_lambda_function.redshift_copy_load.arn
+          "Payload.$"  = "$"
         }
-        Next = "LoadRedshiftDimsFacts"
+        Next = "AuditSuccess"
+        Retry = [{
+          ErrorEquals     = ["States.ALL"]
+          IntervalSeconds = 10
+          MaxAttempts     = 2
+          BackoffRate     = 2.0
+        }]
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          ResultPath  = "$.error"
+          Next        = "AuditFailure"
+        }]
       }
 
-      LoadRedshiftDimsFacts = {
+      # ---------------------------
+      # Audit success to DynamoDB
+      # ---------------------------
+      AuditSuccess = {
         Type     = "Task"
-        Resource = "arn:aws:states:::lambda:invoke"
-        Parameters = {
-          FunctionName = aws_lambda_function.redshift_copy.arn
-          Payload.$    = "$"
-        }
-        Next = "WriteAudit"
-      }
-
-      WriteAudit = {
-        Type = "Task"
         Resource = "arn:aws:states:::dynamodb:putItem"
         Parameters = {
           TableName = aws_dynamodb_table.pipeline_audit.name
           Item = {
-            run_id = { S.$ = "$.run_id" }
-            ts     = { S.$ = "$$.State.EnteredTime" }
-            status = { S  = "SUCCESS" }
+            run_id = { "S.$" = "$.run_id" }
+            ts     = { "S.$" = "$$.State.EnteredTime" }
+            status = { S = "SUCCESS" }
           }
         }
         Next = "Success"
       }
 
+      # ---------------------------
+      # Audit failure to DynamoDB (captures some error text)
+      # ---------------------------
+      AuditFailure = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::dynamodb:putItem"
+        Parameters = {
+          TableName = aws_dynamodb_table.pipeline_audit.name
+          Item = {
+            run_id = { "S.$" = "$.run_id" }
+            ts     = { "S.$" = "$$.State.EnteredTime" }
+            status = { S = "FAILED" }
+            error  = { "S.$" = "$.error.Cause" }
+          }
+        }
+        Next = "FailPipeline"
+      }
+
       Success = { Type = "Succeed" }
 
-      FailPipeline = { Type = "Fail", Cause = "Final demo pipeline failed" }
+      FailPipeline = {
+        Type  = "Fail"
+        Cause = "Final demo pipeline failed"
+      }
     }
   })
 }
 
+# ------------------------------------------------------------
+# Step Functions State Machine
+# ------------------------------------------------------------
 resource "aws_sfn_state_machine" "final_demo" {
-  name     = local.sfn_name
-  role_arn = aws_iam_role.sfn_role.arn
+  name     = "final-demo-governed-lakehouse"
+  role_arn = aws_iam_role.stepfunctions_role.arn
+
   definition = local.sfn_definition
-  tags = var.tags
+
+  tags = {
+    Project = var.project
+    Owner   = var.owner
+  }
 }

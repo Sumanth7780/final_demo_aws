@@ -1,5 +1,7 @@
 aws_region = "us-east-1"
 account_id = "440376044042"
+project = "nyc"
+owner   = "sumanth"
 
 bucket         = "nyc-datalake-week2-sumanth"
 scripts_prefix = "final-demo/scripts"
