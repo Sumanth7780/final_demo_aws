@@ -1,88 +1,25 @@
 # ------------------------------------------------------------
-# IAM Role for Step Functions
-# ------------------------------------------------------------
-resource "aws_iam_role" "stepfunctions_role" {
-  name = "${var.project}-sfn-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Principal = { Service = "states.amazonaws.com" },
-      Action = "sts:AssumeRole"
-    }]
-  })
-
-  tags = {
-    Project = var.project
-    Owner   = var.owner
-  }
-}
-
-resource "aws_iam_role_policy" "stepfunctions_policy" {
-  name = "${var.project}-sfn-policy"
-  role = aws_iam_role.stepfunctions_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      # Glue job run permissions (needed for glue:startJobRun.sync)
-      {
-        Effect = "Allow",
-        Action = [
-          "glue:StartJobRun",
-          "glue:GetJobRun",
-          "glue:GetJobRuns",
-          "glue:GetJob"
-        ],
-        Resource = "*"
-      },
-
-      # Invoke Lambdas
-      {
-        Effect = "Allow",
-        Action = [
-          "lambda:InvokeFunction"
-        ],
-        Resource = [
-          aws_lambda_function.athena_submit_sql.arn,
-          aws_lambda_function.redshift_copy_load.arn
-        ]
-      },
-
-      # Write audit record
-      {
-        Effect = "Allow",
-        Action = [
-          "dynamodb:PutItem"
-        ],
-        Resource = aws_dynamodb_table.pipeline_audit.arn
-      }
-    ]
-  })
-}
-
-# ------------------------------------------------------------
 # Step Functions Definition (JSON via jsonencode)
+# IAM Role/Policy are defined in iam.tf:
+#   - aws_iam_role.sfn_role
+#   - aws_iam_policy.sfn_policy + attachment
 # ------------------------------------------------------------
+
 locals {
   sfn_definition = jsonencode({
     Comment = "FINAL DEMO: NYC Governed Lakehouse (Week2+3+4)"
     StartAt = "Day6_RawToValidated"
 
     States = {
-      # ---------------------------
-      # Day6: Raw -> Validated (Delta)
-      # ---------------------------
       Day6_RawToValidated = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.day6"
-          "Arguments" = {
-            "--RAW_TRIPS_PATH.$"  = "$.paths.raw_trips"
-            "--RAW_ZONES_PATH.$"  = "$.paths.raw_zones"
-            "--DELTA_OUT_PATH.$"  = "$.paths.validated_delta"
+          Arguments = {
+            "--RAW_TRIPS_PATH.$" = "$.paths.raw_trips"
+            "--RAW_ZONES_PATH.$" = "$.paths.raw_zones"
+            "--DELTA_OUT_PATH.$" = "$.paths.validated_delta"
           }
         }
         Next = "Day7_ValidatedToCurated"
@@ -99,15 +36,12 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Day7: Enrich -> Curated (Delta)
-      # ---------------------------
       Day7_ValidatedToCurated = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.day7"
-          "Arguments" = {
+          Arguments = {
             "--VALIDATED_DELTA_PATH.$" = "$.paths.validated_delta"
             "--RAW_ZONES_CSV_PATH.$"   = "$.paths.zones_csv"
             "--CURATED_DELTA_PATH.$"   = "$.paths.curated_delta"
@@ -127,15 +61,12 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Day8: DQ Gates
-      # ---------------------------
       Day8_DQGates = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.day8"
-          "Arguments" = {
+          Arguments = {
             "--INPUT_DELTA_PATH.$"   = "$.paths.validated_delta"
             "--CURATED_DELTA_PATH.$" = "$.paths.curated_delta"
             "--QUARANTINE_PATH.$"    = "$.paths.quarantine"
@@ -156,22 +87,19 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Day9: MDM Zones
-      # ---------------------------
       Day9_MDMZones = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.day9"
-          "Arguments" = {
-            "--RAW_ZONES_PATH.$"      = "$.paths.zones_csv"
-            "--MASTER_OUT_PATH.$"     = "$.paths.master_zones_delta"
-            "--STEWARD_QUEUE_PATH.$"  = "$.paths.steward_queue"
-            "--REJECTS_PATH.$"        = "$.paths.mdm_rejects"
-            "--AUDIT_PATH.$"          = "$.paths.mdm_audit"
-            "--HIGH_CONF.$"           = "$.paths.high_conf"
-            "--MED_CONF.$"            = "$.paths.med_conf"
+          Arguments = {
+            "--RAW_ZONES_PATH.$"     = "$.paths.zones_csv"
+            "--MASTER_OUT_PATH.$"    = "$.paths.master_zones_delta"
+            "--STEWARD_QUEUE_PATH.$" = "$.paths.steward_queue"
+            "--REJECTS_PATH.$"       = "$.paths.mdm_rejects"
+            "--AUDIT_PATH.$"         = "$.paths.mdm_audit"
+            "--HIGH_CONF.$"          = "$.paths.high_conf"
+            "--MED_CONF.$"           = "$.paths.med_conf"
           }
         }
         Next = "Day10_LifecycleOrphans"
@@ -188,25 +116,22 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Day10: Lifecycle + Orphans + dashboards (IMPORTANT: includes 2 required args)
-      # ---------------------------
       Day10_LifecycleOrphans = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.day10"
-          "Arguments" = {
+          Arguments = {
             "--MASTER_ZONES_DELTA_PATH.$"  = "$.paths.master_zones_delta"
             "--CURATED_TRIPS_DELTA_PATH.$" = "$.paths.curated_delta"
 
-            "--ORPHANS_OUT_PATH.$"         = "$.paths.orphans"
-            "--LIFECYCLE_SNAPSHOT_PATH.$"  = "$.paths.lifecycle"
-            "--AUDIT_HISTORY_OUT_PATH.$"   = "$.paths.delta_history"
-            "--RUN_SUMMARY_PATH.$"         = "$.paths.run_summary"
+            "--ORPHANS_OUT_PATH.$"        = "$.paths.orphans"
+            "--LIFECYCLE_SNAPSHOT_PATH.$" = "$.paths.lifecycle"
+            "--AUDIT_HISTORY_OUT_PATH.$"  = "$.paths.delta_history"
+            "--RUN_SUMMARY_PATH.$"        = "$.paths.run_summary"
 
-            "--ORPHANS_CSV_OUT.$"                = "$.paths.orphans_csv_out"
-            "--STEWARD_ACTIVITY_LOG_CSV_OUT.$"   = "$.paths.steward_activity_log_csv_out"
+            "--ORPHANS_CSV_OUT.$"              = "$.paths.orphans_csv_out"
+            "--STEWARD_ACTIVITY_LOG_CSV_OUT.$" = "$.paths.steward_activity_log_csv_out"
           }
         }
         Next = "Export_DeltaToParquet"
@@ -223,18 +148,15 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Week4: Export Delta -> Parquet (for Athena + Redshift)
-      # ---------------------------
       Export_DeltaToParquet = {
         Type     = "Task"
         Resource = "arn:aws:states:::glue:startJobRun.sync"
         Parameters = {
           "JobName.$" = "$.jobs.export"
-          "Arguments" = {
-            "--S3_DELTA_ZONES.$" = "$.paths.master_zones_delta"
-            "--S3_DELTA_TRIPS.$" = "$.paths.curated_delta"
-            "--S3_RS_DIM_ZONE.$" = "$.paths.rs_dim_zone"
+          Arguments = {
+            "--S3_DELTA_ZONES.$"  = "$.paths.master_zones_delta"
+            "--S3_DELTA_TRIPS.$"  = "$.paths.curated_delta"
+            "--S3_RS_DIM_ZONE.$"  = "$.paths.rs_dim_zone"
             "--S3_RS_FACT_TRIP.$" = "$.paths.rs_fact_trip"
           }
         }
@@ -252,9 +174,6 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Athena Lambda: create DBs + external tables + certified view
-      # ---------------------------
       Athena_CreateTablesViews = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
@@ -276,9 +195,6 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Redshift Lambda: COPY load dim/fact from S3 Parquet
-      # ---------------------------
       Redshift_CopyLoad = {
         Type     = "Task"
         Resource = "arn:aws:states:::lambda:invoke"
@@ -300,9 +216,6 @@ locals {
         }]
       }
 
-      # ---------------------------
-      # Audit success to DynamoDB
-      # ---------------------------
       AuditSuccess = {
         Type     = "Task"
         Resource = "arn:aws:states:::dynamodb:putItem"
@@ -317,9 +230,6 @@ locals {
         Next = "Success"
       }
 
-      # ---------------------------
-      # Audit failure to DynamoDB (captures some error text)
-      # ---------------------------
       AuditFailure = {
         Type     = "Task"
         Resource = "arn:aws:states:::dynamodb:putItem"
@@ -347,15 +257,13 @@ locals {
 
 # ------------------------------------------------------------
 # Step Functions State Machine
+# Uses IAM role from iam.tf: aws_iam_role.sfn_role
 # ------------------------------------------------------------
 resource "aws_sfn_state_machine" "final_demo" {
   name     = "final-demo-governed-lakehouse"
-  role_arn = aws_iam_role.stepfunctions_role.arn
+  role_arn = aws_iam_role.sfn_role.arn
 
   definition = local.sfn_definition
 
-  tags = {
-    Project = var.project
-    Owner   = var.owner
-  }
+  tags = var.tags
 }
