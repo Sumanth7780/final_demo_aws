@@ -27,58 +27,48 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       # ======================================================
-      # 3) Debug (so path issues never happen again)
+      # 3) Debug folders (kept for safety)
       # ======================================================
       - name: Debug repo folders
         run: |
           echo "=== Repo root ==="
           ls -la
-          echo "=== Find python files (top 4 levels) ==="
+          echo "=== Find python files ==="
           find . -maxdepth 4 -type f -name "*.py" | sed -e 's|^\./||' | head -n 200
-          echo "=== Find SQL files (top 5 levels) ==="
+          echo "=== Find SQL files ==="
           find . -maxdepth 5 -type f -name "*.sql" | sed -e 's|^\./||' | head -n 200
 
       # ======================================================
-      # 4) Upload Glue scripts to S3
-      #    Your repo has: glue/*.py (from your screenshot)
+      # 4) Upload Glue scripts (repo has glue/)
       # ======================================================
-      - name: Upload Athena SQL to S3 (auto-detect)
+      - name: Upload Glue scripts to S3
         run: |
-          echo "Searching for Athena ddl folder..."
-          SQL_DIR=$(find . -type d -path "*/athena/ddl" | head -n 1)
-
-          if [ -z "$SQL_DIR" ]; then
-            echo "ERROR: Could not find any */athena/ddl folder in repo."
-            echo "Folders under repo root:"
-            find . -maxdepth 3 -type d | sed -e 's|^\./||'
+          if [ ! -d "glue" ]; then
+            echo "ERROR: glue/ folder not found at repo root."
             exit 1
           fi
 
-          echo "Found SQL folder: $SQL_DIR"
-          aws s3 sync "$SQL_DIR" \
-            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/sql \
+          aws s3 sync glue \
+            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/scripts \
             --delete \
             --region $AWS_REGION
 
-
-
       # ======================================================
-      # 5) Upload Athena SQL to S3
-      #    Your repo has: athena/ddl/*.sql (from your screenshot)
+      # 5) Upload Athena SQL (repo has app/sql/)
       # ======================================================
       - name: Upload Athena SQL to S3
         run: |
-          if [ ! -d "athena/ddl" ]; then
-            echo "ERROR: athena/ddl folder not found at repo root."
+          if [ ! -d "app/sql" ]; then
+            echo "ERROR: app/sql folder not found at repo root."
             exit 1
           fi
 
-          aws s3 sync athena/ddl \
+          aws s3 sync app/sql \
             s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/sql \
             --delete \
             --region $AWS_REGION
@@ -116,10 +106,7 @@ jobs:
             -var="redshift_db=dev"
 
       # ======================================================
-      # 7) OPTIONAL: Auto-run the pipeline after deploy
-      # ======================================================
-      # ======================================================
-      # OPTIONAL: Auto-run the pipeline after deploy
+      # 7) OPTIONAL: Auto-run Step Functions
       # ======================================================
       - name: Start Step Functions execution
         env:
