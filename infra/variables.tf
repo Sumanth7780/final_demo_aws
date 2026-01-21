@@ -75,3 +75,12 @@ variable "owner" {
   description = "Owner tag"
   default     = "sumanth"
 }
+variable "tags" {
+  type        = map(string)
+  description = "Common tags applied to all resources"
+  default     = {
+    Project = "nyc"
+    Owner   = "sumanth"
+    Env     = "dev"
+  }
+}
