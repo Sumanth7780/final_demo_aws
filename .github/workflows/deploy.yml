@@ -110,8 +110,13 @@ jobs:
       # ======================================================
       # 7) OPTIONAL: Auto-run the pipeline after deploy
       # ======================================================
+      # ======================================================
+      # OPTIONAL: Auto-run the pipeline after deploy
+      # ======================================================
       - name: Start Step Functions execution
-        if: ${{ secrets.AUTO_RUN == 'true' }}
+        env:
+          AUTO_RUN: ${{ secrets.AUTO_RUN }}
+        if: ${{ env.AUTO_RUN == 'true' }}
         run: |
           SFN_ARN=$(aws stepfunctions list-state-machines \
             --query "stateMachines[?name=='final-demo-governed-lakehouse'].stateMachineArn | [0]" \
