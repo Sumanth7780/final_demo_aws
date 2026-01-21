@@ -1,0 +1,104 @@
+name: Final Demo – Governed Lakehouse CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  TF_WORKING_DIR: infra
+  S3_DEMO_PREFIX: final-demo
+  AUTO_RUN: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ======================================================
+      # Checkout repo
+      # ======================================================
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ======================================================
+      # AWS Credentials
+      # ======================================================
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ======================================================
+      # Upload Glue scripts (REAL scripts)
+      # ======================================================
+      - name: Upload Glue scripts to S3
+        run: |
+          aws s3 sync app/glue \
+            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/scripts \
+            --delete
+
+      # ======================================================
+      # Upload Athena SQL
+      # ======================================================
+      - name: Upload Athena SQL to S3
+        run: |
+          aws s3 sync app/sql \
+            s3://${{ secrets.DEMO_BUCKET }}/${{ env.S3_DEMO_PREFIX }}/sql \
+            --delete
+
+      # ======================================================
+      # Terraform setup
+      # ======================================================
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      # ======================================================
+      # Terraform Apply (infra + Step Functions)
+      # ======================================================
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="account_id=${{ secrets.ACCOUNT_ID }}" \
+            -var="bucket=${{ secrets.DEMO_BUCKET }}" \
+            -var="scripts_prefix=${{ env.S3_DEMO_PREFIX }}/scripts" \
+            -var="sql_prefix=${{ env.S3_DEMO_PREFIX }}/sql" \
+            -var="glue_role_arn=${{ secrets.GLUE_ROLE_ARN }}" \
+            -var="athena_workgroup=nyc-governed-wg" \
+            -var="athena_results_s3=s3://${{ secrets.DEMO_BUCKET }}/athena_results/" \
+            -var="athena_db_master=nyc_master_db" \
+            -var="athena_db_curated=nyc_curated_db" \
+            -var="redshift_secret_name=nyc/redshift/admin" \
+            -var="redshift_iam_role_arn=${{ secrets.REDSHIFT_IAM_ROLE_ARN }}" \
+            -var="redshift_db=dev"
+
+      # ======================================================
+      # OPTIONAL: Auto-run the pipeline after deploy
+      # ======================================================
+      - name: Start Step Functions execution
+        if: ${{ env.AUTO_RUN == 'true' }}
+        run: |
+          SFN_ARN=$(aws stepfunctions list-state-machines \
+            --query "stateMachines[?name=='final-demo-governed-lakehouse'].stateMachineArn | [0]" \
+            --output text \
+            --region $AWS_REGION)
+
+          echo "Starting execution: $SFN_ARN"
+
+          aws stepfunctions start-execution \
+            --state-machine-arn "$SFN_ARN" \
+            --input file://stepfunctions/payloads/run_input.dev.json \
+            --region $AWS_REGION

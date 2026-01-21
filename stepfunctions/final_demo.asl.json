@@ -1,0 +1,307 @@
+{
+    "Comment": "FINAL DEMO: NYC Governed Lakehouse (Week2+3+4) - Glue + DQ + MDM + Athena + Redshift",
+    "StartAt": "InitRunContext",
+    "States": {
+        "InitRunContext": {
+            "Type": "Pass",
+            "Parameters": {
+                "run_id.$": "$.run_id",
+                "jobs.$": "$.jobs",
+                "lambdas.$": "$.lambdas",
+                "paths.$": "$.paths",
+                "athena.$": "$.athena",
+                "redshift.$": "$.redshift",
+                "flags.$": "$.flags"
+            },
+            "Next": "Day6_RawToValidated"
+        },
+        "Day6_RawToValidated": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.day6",
+                "Arguments": {
+                    "--RAW_TRIPS_PATH.$": "$.paths.raw_trips",
+                    "--RAW_ZONES_PATH.$": "$.paths.raw_zones",
+                    "--DELTA_OUT_PATH.$": "$.paths.validated_delta"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Day7_ValidatedToCurated"
+        },
+        "Day7_ValidatedToCurated": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.day7",
+                "Arguments": {
+                    "--VALIDATED_DELTA_PATH.$": "$.paths.validated_delta",
+                    "--RAW_ZONES_CSV_PATH.$": "$.paths.zones_csv",
+                    "--CURATED_DELTA_PATH.$": "$.paths.curated_delta"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Day8_DQGates"
+        },
+        "Day8_DQGates": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.day8",
+                "Arguments": {
+                    "--INPUT_DELTA_PATH.$": "$.paths.validated_delta",
+                    "--CURATED_DELTA_PATH.$": "$.paths.curated_delta",
+                    "--QUARANTINE_PATH.$": "$.paths.quarantine",
+                    "--DQ_REPORT_PATH.$": "$.paths.dq_report"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "DQGateDecision"
+        },
+        "DQGateDecision": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.flags.skip_dq_gate",
+                    "BooleanEquals": true,
+                    "Next": "Day9_MDMZones"
+                }
+            ],
+            "Default": "Day9_MDMZones"
+        },
+        "Day9_MDMZones": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.day9",
+                "Arguments": {
+                    "--RAW_ZONES_PATH.$": "$.paths.zones_csv",
+                    "--MASTER_OUT_PATH.$": "$.paths.master_zones_delta",
+                    "--STEWARD_QUEUE_PATH.$": "$.paths.steward_queue",
+                    "--REJECTS_PATH.$": "$.paths.mdm_rejects",
+                    "--AUDIT_PATH.$": "$.paths.mdm_audit",
+                    "--HIGH_CONF.$": "$.paths.high_conf",
+                    "--MED_CONF.$": "$.paths.med_conf"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "StewardQueueDecision"
+        },
+        "StewardQueueDecision": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.flags.skip_steward_check",
+                    "BooleanEquals": true,
+                    "Next": "Day10_LifecycleOrphans"
+                }
+            ],
+            "Default": "Day10_LifecycleOrphans"
+        },
+        "Day10_LifecycleOrphans": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.day10",
+                "Arguments": {
+                    "--MASTER_ZONES_DELTA_PATH.$": "$.paths.master_zones_delta",
+                    "--CURATED_TRIPS_DELTA_PATH.$": "$.paths.curated_delta",
+                    "--ORPHANS_OUT_PATH.$": "$.paths.orphans",
+                    "--LIFECYCLE_SNAPSHOT_PATH.$": "$.paths.lifecycle",
+                    "--AUDIT_HISTORY_OUT_PATH.$": "$.paths.delta_history",
+                    "--RUN_SUMMARY_PATH.$": "$.paths.run_summary",
+                    "--ORPHANS_CSV_OUT.$": "$.paths.orphans_csv_out",
+                    "--STEWARD_ACTIVITY_LOG_CSV_OUT.$": "$.paths.steward_activity_log_csv_out"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Export_DeltaToParquet"
+        },
+        "Export_DeltaToParquet": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName.$": "$.jobs.export",
+                "Arguments": {
+                    "--S3_DELTA_ZONES.$": "$.paths.master_zones_delta",
+                    "--S3_DELTA_TRIPS.$": "$.paths.curated_delta",
+                    "--S3_RS_DIM_ZONE.$": "$.paths.rs_dim_zone",
+                    "--S3_RS_FACT_TRIP.$": "$.paths.rs_fact_trip"
+                }
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 15,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Athena_CreateExternalTablesAndViews"
+        },
+        "Athena_CreateExternalTablesAndViews": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+                "FunctionName.$": "$.lambdas.athena_sql",
+                "Payload.$": "$"
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 10,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Redshift_CopyLoad"
+        },
+        "Redshift_CopyLoad": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+                "FunctionName.$": "$.lambdas.redshift_load",
+                "Payload.$": "$"
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "IntervalSeconds": 10,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2
+                }
+            ],
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "ResultPath": "$.error",
+                    "Next": "FailPipeline"
+                }
+            ],
+            "Next": "Success"
+        },
+        "Success": {
+            "Type": "Succeed"
+        },
+        "FailPipeline": {
+            "Type": "Fail",
+            "Cause": "Final demo pipeline failed (see $.error)"
+        }
+    }
+}

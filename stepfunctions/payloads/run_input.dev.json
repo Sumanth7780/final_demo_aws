@@ -1,0 +1,73 @@
+{
+  "run_id": "final-demo-dev-001",
+
+  "flags": {
+    "skip_dq_gate": false,
+    "skip_steward_check": true
+  },
+
+  "jobs": {
+    "day6": "final-day6-raw-to-validated",
+    "day7": "final-day7-validated-to-curated",
+    "day8": "final-day8-dq-gates",
+    "day9": "final-day9-mdm-zones",
+    "day10": "final-day10-lifecycle-orphans",
+    "export": "final-week4-export-delta-to-parquet"
+  },
+
+  "lambdas": {
+    "athena_sql": "final-athena-submit-sql",
+    "redshift_load": "final-redshift-copy-load"
+  },
+
+  "paths": {
+    "raw_trips": "s3://nyc-datalake-week2-sumanth/raw_data/yellow_tripdata/",
+    "raw_zones": "s3://nyc-datalake-week2-sumanth/raw_data/reference/",
+    "zones_csv": "s3://nyc-datalake-week2-sumanth/raw_data/reference/taxi_zone_lookup.csv",
+
+    "validated_delta": "s3://nyc-datalake-week2-sumanth/validated_data/yellow_tripdata_delta/",
+    "curated_delta": "s3://nyc-datalake-week2-sumanth/curated_data/yellow_tripdata/",
+
+    "quarantine": "s3://nyc-datalake-week2-sumanth/validated_data/quarantine/",
+    "dq_report": "s3://nyc-datalake-week2-sumanth/validated_data/dq_reports/",
+
+    "master_zones_delta": "s3://nyc-datalake-week2-sumanth/master_data/taxi_zones_delta/",
+    "steward_queue": "s3://nyc-datalake-week2-sumanth/master_data/steward_queue/",
+    "mdm_rejects": "s3://nyc-datalake-week2-sumanth/master_data/rejects/",
+    "mdm_audit": "s3://nyc-datalake-week2-sumanth/master_data/mdm_audit/",
+
+    "orphans": "s3://nyc-datalake-week2-sumanth/master_data/orphans/",
+    "lifecycle": "s3://nyc-datalake-week2-sumanth/master_data/lifecycle_snapshot/",
+    "delta_history": "s3://nyc-datalake-week2-sumanth/master_data/delta_history_audit/",
+    "run_summary": "s3://nyc-datalake-week2-sumanth/master_data/run_summary/",
+
+    "orphans_csv_out": "s3://nyc-datalake-week2-sumanth/master_data/dashboard/orphans_csv/",
+    "steward_activity_log_csv_out": "s3://nyc-datalake-week2-sumanth/master_data/dashboard/steward_activity_log_csv/",
+
+    "rs_dim_zone": "s3://nyc-datalake-week2-sumanth/redshift_export/dim_zone/",
+    "rs_fact_trip": "s3://nyc-datalake-week2-sumanth/redshift_export/fact_trip/",
+
+    "high_conf": "0.95",
+    "med_conf": "0.80"
+  },
+
+  "athena": {
+    "workgroup": "nyc-governed-wg",
+    "results_s3": "s3://nyc-datalake-week2-sumanth/athena_results/",
+    "db_master": "nyc_master_db",
+    "db_curated": "nyc_curated_db",
+    "sql_files": [
+      "00_create_master_db.sql",
+      "01_create_curated_db.sql",
+      "02_create_dim_zone.sql",
+      "03_create_fact_trip.sql",
+      "10_create_certified_view.sql"
+    ]
+  },
+
+  "redshift": {
+    "secret_name": "nyc/redshift/admin",
+    "iam_role_arn": "arn:aws:iam::440376044042:role/RedshiftServerlessS3Role",
+    "db": "dev"
+  }
+}
